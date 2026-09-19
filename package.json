@@ -1,0 +1,12 @@
+{
+  "name": "incidentbridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Distributed network incident detection and response prototype",
+  "scripts": {
+    "dev": "npm run dev --prefix backend & npm run dev --prefix frontend; wait",
+    "test": "npm test --prefix backend",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down"
+  }
+}

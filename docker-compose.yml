@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: incidentbridge-postgres
+    environment:
+      POSTGRES_USER: incidentbridge
+      POSTGRES_PASSWORD: incidentbridge
+      POSTGRES_DB: incidentbridge
+    ports:
+      - "5435:5432"
+    volumes:
+      - incidentbridge_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U incidentbridge -d incidentbridge"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  incidentbridge_pgdata:
