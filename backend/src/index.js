@@ -9,8 +9,18 @@ import { processTick } from './modules/monitoring/index.js';
 import { logSmsProvider } from './integrations/africastalking/sms.js';
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.set('trust proxy', 1);
+
+app.use(
+  cors({
+    origin: config.corsOrigin === '*' ? true : config.corsOrigin.split(',').map((v) => v.trim()),
+  }),
+);
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    if (buf?.length) req.rawBody = buf.toString('utf8');
+  },
+}));
 app.use(express.urlencoded({ extended: false }));
 app.use('/api', api);
 app.get('/ussd', ussdLiveHandler);
@@ -27,8 +37,19 @@ app.use((error, req, res, _next) => {
     res.end('END Temporary error. Please try again.');
     return;
   }
+  if (error?.type === 'entity.parse.failed' || error instanceof SyntaxError) {
+    res.status(400).json({
+      error: 'Invalid JSON body',
+      detail: 'Send a valid JSON object. Example: {"to":"+256755032436","message":"Hello"}',
+      received: typeof req.rawBody === 'string' ? req.rawBody.slice(0, 200) : undefined,
+    });
+    return;
+  }
   res.status(500).json({ error: 'Internal server error' });
 });
+
+let monitorTimer = null;
+let server = null;
 
 async function main() {
   await waitForDatabase();
@@ -36,17 +57,44 @@ async function main() {
   await seedIfEmpty();
   await alignAfricaTalkingRecipients();
 
-  app.listen(config.port, () => {
-    console.log(`[incidentbridge] API listening on http://localhost:${config.port}`);
-    console.log('[incidentbridge] Network telemetry and cellular fallback are SIMULATED');
+  server = app.listen(config.port, config.host, () => {
+    console.log(`[incidentbridge] API listening on http://${config.host}:${config.port}`);
+    console.log(`[incidentbridge] env=${config.nodeEnv} simulation telemetry enabled`);
     logSmsProvider();
   });
 
   await processTick();
-  setInterval(() => {
+  monitorTimer = setInterval(() => {
     processTick().catch((error) => console.error('[monitor]', error));
   }, config.monitorIntervalMs);
 }
+
+async function shutdown(signal) {
+  console.log(`[incidentbridge] ${signal} received, shutting down`);
+  if (monitorTimer) clearInterval(monitorTimer);
+  await new Promise((resolve) => {
+    if (!server) {
+      resolve();
+      return;
+    }
+    server.close(() => resolve());
+  });
+  await pool.end().catch(() => {});
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => {
+  shutdown('SIGTERM').catch((error) => {
+    console.error('[fatal]', error);
+    process.exit(1);
+  });
+});
+process.on('SIGINT', () => {
+  shutdown('SIGINT').catch((error) => {
+    console.error('[fatal]', error);
+    process.exit(1);
+  });
+});
 
 main().catch((error) => {
   console.error('[fatal]', error);

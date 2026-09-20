@@ -6,7 +6,7 @@ import {
 import { listScenarios } from '../modules/simulation/index.js';
 import { listIncidents, markInvestigating } from '../modules/incidents/index.js';
 import { listEvents } from '../services/events.js';
-import { handleUssd, handleUssdNotification, DEMO_USSD_PHONES, getLastUssdCallback } from '../modules/ussd/index.js';
+import { handleUssd, handleUssdNotification, listDemoUssdPhones, getLastUssdCallback } from '../modules/ussd/index.js';
 import { config } from '../config/index.js';
 import {
   sendSms,
@@ -15,6 +15,17 @@ import {
   listRecentSms,
   recordDeliveryReport,
 } from '../integrations/africastalking/sms.js';
+import {
+  listTechnicians,
+  getTechnician,
+  createTechnician,
+  updateTechnician,
+  setTechnicianActive,
+  listServiceAreasDetailed,
+  setAreaTechnicianAssignments,
+  technicianNotifications,
+} from '../modules/technicians/index.js';
+import { normalizeUgPhone, isValidUgPhone } from '../modules/technicians/phone.js';
 
 export const api = express.Router();
 
@@ -85,6 +96,117 @@ api.get('/sms/recent', async (req, res, next) => {
   }
 });
 
+api.get('/technicians', async (req, res, next) => {
+  try {
+    const includeInactive = req.query.includeInactive !== 'false';
+    res.json(await listTechnicians({ includeInactive }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+api.post('/technicians', async (req, res, next) => {
+  try {
+    const technician = await createTechnician(req.body || {});
+    res.status(201).json(technician);
+  } catch (error) {
+    if (error.status) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+api.get('/technicians/:id', async (req, res, next) => {
+  try {
+    const technician = await getTechnician(req.params.id);
+    if (!technician) {
+      res.status(404).json({ error: 'Technician not found' });
+      return;
+    }
+    res.json(technician);
+  } catch (error) {
+    next(error);
+  }
+});
+
+api.put('/technicians/:id', async (req, res, next) => {
+  try {
+    const technician = await updateTechnician(req.params.id, req.body || {});
+    if (!technician) {
+      res.status(404).json({ error: 'Technician not found' });
+      return;
+    }
+    res.json(technician);
+  } catch (error) {
+    if (error.status) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+api.patch('/technicians/:id/status', async (req, res, next) => {
+  try {
+    const technician = await setTechnicianActive(req.params.id, req.body?.active !== false);
+    if (!technician) {
+      res.status(404).json({ error: 'Technician not found' });
+      return;
+    }
+    res.json(technician);
+  } catch (error) {
+    next(error);
+  }
+});
+
+api.get('/technicians/:id/notifications', async (req, res, next) => {
+  try {
+    const payload = await technicianNotifications(req.params.id);
+    if (!payload) {
+      res.status(404).json({ error: 'Technician not found' });
+      return;
+    }
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+api.get('/service-areas', async (_req, res, next) => {
+  try {
+    res.json(await listServiceAreasDetailed());
+  } catch (error) {
+    next(error);
+  }
+});
+
+api.put('/service-areas/:id/technicians', async (req, res, next) => {
+  try {
+    const assignments = await setAreaTechnicianAssignments(
+      req.params.id,
+      req.body?.assignments || [],
+    );
+    res.json({ service_area_id: req.params.id, assignments });
+  } catch (error) {
+    if (error.status) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+api.post('/phones/normalize', (req, res) => {
+  const phone = req.body?.phone;
+  if (!isValidUgPhone(phone)) {
+    res.status(400).json({ error: 'Invalid Ugandan mobile number', phone });
+    return;
+  }
+  res.json({ phone: normalizeUgPhone(phone) });
+});
+
 api.get('/dashboard', async (_req, res, next) => {
   try {
     res.json(await getDashboard());
@@ -141,8 +263,12 @@ api.post('/simulation/scenario', async (req, res, next) => {
   }
 });
 
-api.get('/ussd/demo-phones', (_req, res) => {
-  res.json(DEMO_USSD_PHONES);
+api.get('/ussd/demo-phones', async (_req, res, next) => {
+  try {
+    res.json(await listDemoUssdPhones());
+  } catch (error) {
+    next(error);
+  }
 });
 
 function sendUssdResponse(res, response, hop) {

@@ -21,8 +21,12 @@ export function messagingUrl(username = config.africastalking.username) {
 }
 
 export function formatMsisdn(phone) {
-  const digits = String(phone || '').replace(/[^\d]/g, '');
+  let digits = String(phone || '').replace(/[^\d]/g, '');
   if (!digits) return '';
+  // Local UG numbers like 0755... → +256755...
+  if (digits.startsWith('0') && digits.length === 10) {
+    digits = `256${digits.slice(1)}`;
+  }
   return `+${digits}`;
 }
 
@@ -94,6 +98,17 @@ function parseJson(bodyText) {
 
 function summarizeBody(bodyText) {
   return String(bodyText || '').replace(/\s+/g, ' ').slice(0, 300);
+}
+
+function logApiResponse(operation, response, bodyText) {
+  const apiKey = config.africastalking.apiKey;
+  const safeBody = String(bodyText || '')
+    .replaceAll(apiKey || '\0', '[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .slice(0, 2000);
+  console.log(
+    `[africastalking:response] operation=${operation} status=${response.status} body=${safeBody || '<empty>'}`,
+  );
 }
 
 function rememberSms(record) {
@@ -194,6 +209,7 @@ export async function sendSms({ to, message, purpose = 'manual', incidentId = nu
     });
 
     const payload = await response.text();
+    logApiResponse('sms-send', response, payload);
     const interpretation = interpretSmsResponse(response.status, payload);
 
     if (!interpretation.ok) {
@@ -266,13 +282,36 @@ export async function recordDeliveryReport(payload) {
   );
 
   if (identifier) {
+    const normalized = String(status || '').toLowerCase();
+    let lifecycle = null;
+    if (['success', 'delivered', 'delivery success'].some((value) => normalized.includes(value))) {
+      lifecycle = 'DELIVERED';
+    } else if (['failed', 'rejected', 'undeliverable'].some((value) => normalized.includes(value))) {
+      lifecycle = 'FAILED';
+    }
+
     await query(
       `UPDATE sms_messages
        SET provider_status = COALESCE($2, provider_status),
-           detail = COALESCE($3, detail)
+           detail = COALESCE($3, detail),
+           status = COALESCE($4, status)
        WHERE provider_message_id = $1`,
-      [identifier, status, failureReason || status],
+      [identifier, status, failureReason || status, lifecycle],
     );
+
+    if (lifecycle) {
+      await query(
+        `UPDATE incidents
+         SET notification_status = $2,
+             notification_detail = COALESCE($3, notification_detail)
+         WHERE id = (
+           SELECT incident_id FROM sms_messages
+           WHERE provider_message_id = $1 AND incident_id IS NOT NULL
+           LIMIT 1
+         )`,
+        [identifier, lifecycle, failureReason || status],
+      );
+    }
   }
 
   console.log(
@@ -304,16 +343,22 @@ export async function verifyAfricaTalking() {
       },
     });
     const payload = await response.text();
+    logApiResponse('authentication', response, payload);
     const parsed = parseJson(payload);
     const balance = parsed?.UserData?.balance;
 
     if (!response.ok || !parsed?.UserData) {
+      const authHint =
+        response.status === 401
+          ? ` Generate a new API key in the ${environment} app (Settings → API Key) and put it in backend/.env as AT_API_KEY, then restart.`
+          : '';
       return {
         ok: false,
         connected: false,
         ...status,
         http_status: response.status,
-        detail: summarizeBody(payload) || `Africa's Talking HTTP ${response.status}`,
+        detail:
+          (summarizeBody(payload) || `Africa's Talking HTTP ${response.status}`) + authHint,
       };
     }
 
