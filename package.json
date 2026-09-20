@@ -7,6 +7,10 @@
     "dev": "npm run dev --prefix backend & npm run dev --prefix frontend; wait",
     "test": "npm test --prefix backend",
     "db:up": "docker compose up -d postgres",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "api:up": "docker compose up -d --build api",
+    "stack:up": "docker compose up -d --build",
+    "stack:down": "docker compose down",
+    "stack:logs": "docker compose logs -f api"
   }
 }
