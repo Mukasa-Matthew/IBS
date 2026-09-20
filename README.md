@@ -102,8 +102,71 @@ The Vite dev server proxies `/api` and `/ussd` to the backend.
 | `AT_USERNAME` | Africa's Talking username. Use `sandbox` in the AT sandbox. Use the live app username in production. |
 | `AT_API_KEY` | Africa's Talking API key from the dashboard. Sent as the `apiKey` request header. Never committed. |
 | `AT_SENDER_ID` | Optional live sender ID / short code (`from`). Not sent in sandbox. |
+| `AT_ALERT_PHONE` | Technician / test SMS destination (international format). |
+| `HOST` | Bind address (default `0.0.0.0` for VPS/Docker). |
+| `CORS_ORIGIN` | Allowed browser origins (`*` or comma-separated). |
+| `NODE_ENV` | Set to `production` on the VPS. |
 
 Leave `AT_API_KEY` empty to keep SMS in mock mode.
+
+## Deploy API on a VPS (independent of the frontend)
+
+The backend is designed to run alone with Postgres. Recommended path: Docker Compose.
+
+### 1. On the VPS
+
+```bash
+git clone https://github.com/Mukasa-Matthew/IBS.git
+cd IBS
+cp .env.example .env
+```
+
+Edit `.env` and set at least:
+
+```bash
+POSTGRES_PASSWORD=strong-password-here
+AT_USERNAME=Thewton
+AT_API_KEY=your-live-api-key
+AT_ALERT_PHONE=+256755032436
+```
+
+### 2. Start API + Postgres
+
+```bash
+chmod +x deploy/vps-up.sh
+./deploy/vps-up.sh
+# or: docker compose up -d --build
+```
+
+### 3. Verify
+
+```bash
+curl -s http://127.0.0.1:4000/api/health
+curl -s http://127.0.0.1:4000/api/africastalking/status
+curl -s -X POST http://127.0.0.1:4000/api/sms/send \
+  -H 'Content-Type: application/json' \
+  -d '{"to":"+256755032436","message":"IncidentBridge VPS SMS test"}'
+```
+
+Expect `"connected": true` and SMS `"status":"SENT"`.
+
+### 4. Public HTTPS (required for USSD / delivery callbacks)
+
+Put Nginx or Caddy in front of port `4000`, then point Africa's Talking to:
+
+- SMS delivery (optional): `https://your-domain/sms/delivery`
+- USSD callback: `https://your-domain/ussd`
+- USSD events: `https://your-domain/ussd/events`
+
+### Alternative: systemd (no Docker for the Node process)
+
+Use `deploy/incidentbridge-api.service` after installing Node 20+, Postgres, and placing the repo under `/opt/incidentbridge` with `backend/.env` filled in.
+
+```bash
+sudo cp deploy/incidentbridge-api.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now incidentbridge-api
+```
 
 ## Africa's Talking integration
 
@@ -130,35 +193,57 @@ To enable sandbox SMS:
 
 Sandbox messages are delivered to the Africa's Talking simulator, not live phones, unless you switch to a production username and key.
 
-USSD follows the Africa's Talking callback pattern.
+### USSD (Africa's Talking simulator)
 
-Session callback (configure this as the USSD callback URL):
+**Full setup guide:** [docs/africastalking-ussd-simulator.md](docs/africastalking-ussd-simulator.md)
 
-- `POST /ussd`
-- `POST /api/ussd`
+Short version:
 
-Africa's Talking sends `sessionId`, `serviceCode`, `phoneNumber` and `text` as form fields. The first request has empty `text`. Later requests concatenate choices with `*` (for example `1`). Responses are `text/plain` and start with `CON` (continue) or `END` (terminal). Each response includes the `at-ussd-hop-metadata` header so AT can build `hopsMetadata`.
+1. Run the API on `:4000` and expose it with HTTPS (cloudflared tunnel or VPS).
+2. In the AT dashboard set:
+   - Callback URL → `https://YOUR-PUBLIC-HOST/ussd`
+   - Event URL → `https://YOUR-PUBLIC-HOST/ussd/events`
+3. In the AT USSD simulator, dial with a **customer** or **technician** phone from the table below — menus are role-split by MSISDN.
 
-End-of-session notification (configure this as the USSD event notification URL):
+Session callback:
 
-- `POST /ussd/events`
-- `POST /api/ussd/events`
+- `POST /ussd` (also `/api/ussd`)
 
-That endpoint accepts the AT form fields (`date`, `sessionId`, `serviceCode`, `networkCode`, `phoneNumber`, `status`, `cost`, `durationInMillis`, `hopsCount`, `hopsMetadata`, `input`, `lastAppResponse`, `errorMessage`) and records them. It does not send a USSD menu back.
+Africa's Talking sends `sessionId`, `serviceCode`, `phoneNumber` and `text` as form fields. The first request has empty `text`. Later requests concatenate choices with `*` (for example `1`, then `1*IB-1059`). Responses are `text/plain` and start with `CON` (continue) or `END` (terminal).
 
-Demo subscriber map:
+Event notification:
 
-- `256700000001` → Mukono A
-- `256700000002` → Mukono B
+- `POST /ussd/events` (also `/api/ussd/events`)
 
-Menu:
+#### Customer phones (status + report only)
 
-```
-IncidentBridge
+| Phone | Site |
+| --- | --- |
+| `256710000001` | Seeta |
+| `256710005001` | Mukono Central |
+
+```text
+IncidentBridge Customer
 1. Check my service status
 2. Report a problem
 ```
 
+#### Technician phones (acknowledge by SMS reference)
+
+| Phone | Person |
+| --- | --- |
+| `256788607860` | Magezi Richard (Seeta) |
+| `256755032436` | Matthew (NOC / Mukono Central) |
+| `256787106109` | Elijah (Namataba) |
+
+```text
+IncidentBridge Technician
+1. Acknowledge incident
+2. My open assignments
+0. Exit
+```
+
+Technician option `1` then accepts `IB-1059` or `1059` and sets the incident to `INVESTIGATING` when the caller is the assignee (or NOC). Customers cannot use that path.
 ## Simulation mode
 
 Demo buttons **do not create incidents**. They change simulated reachability. The monitoring loop then emits observations, the localization engine classifies them, and incidents appear only after the consecutive-failure threshold.
@@ -171,14 +256,13 @@ Wait about 6 seconds after clicking a failure (3 probes × 2 seconds). Restore t
 
 | Control | Expected result |
 | --- | --- |
-| Fail Mukono A uplink | `AREA_CORE_PATH_FAILURE`, 67 customers potentially affected, Mukono A technician, simulated SMS, simulated cellular fallback |
-| Fail upstream internet | **One** shared `UPSTREAM_CONNECTIVITY_FAILURE`, 125 customers potentially affected, NOC engineer |
-| Fail Mukono A local access | `LOCAL_ACCESS_FAILURE`, Mukono A technician |
-| Ambiguous failure | `UNDETERMINED` — “Failure location could not be confidently determined. Engineer investigation required.” |
+| Fail Seeta uplink | `AREA_CORE_PATH_FAILURE`, Seeta customers potentially affected, Magezi SMS, simulated cellular fallback |
+| Fail upstream internet | **One** shared `UPSTREAM_CONNECTIVITY_FAILURE`, all sites, NOC (Matthew) |
+| Fail Seeta local access | `LOCAL_ACCESS_FAILURE`, Seeta technician |
+| Ambiguous failure | `UNDETERMINED` — engineer investigation required |
 | Restore network | After 3 successful checks, incident becomes `RESOLVED` with duration |
 
-Use the USSD demo on the dashboard with the Mukono A number during an A-side incident to see the active-incident message.
-
+For Africa's Talking USSD simulator steps (callback URLs, phones, ack flow), see [docs/africastalking-ussd-simulator.md](docs/africastalking-ussd-simulator.md).
 ## Tests
 
 ```bash
