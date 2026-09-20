@@ -22,6 +22,7 @@ describe('Africa\'s Talking SMS client', () => {
   it('formats technician numbers as international MSISDNs', () => {
     assert.equal(formatMsisdn('256700111001'), '+256700111001');
     assert.equal(formatMsisdn('+256700111001'), '+256700111001');
+    assert.equal(formatMsisdn('0755032436'), '+256755032436');
   });
 
   it('treats HTTP 201 with a successful recipient as sent', () => {

@@ -16,6 +16,7 @@ export function composeIncidentSms({ reference, title, customerCount, domain }) 
     `Failure domain: ${displayNameForDomain(domain)}.`,
     '',
     'Please investigate.',
+    `Ack via USSD: dial *384*XXXX# → 1 → ${reference}`,
   ].join('\n');
 }
 
