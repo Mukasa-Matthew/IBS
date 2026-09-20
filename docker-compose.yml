@@ -2,19 +2,57 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: incidentbridge-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: incidentbridge
-      POSTGRES_PASSWORD: incidentbridge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-incidentbridge}
       POSTGRES_DB: incidentbridge
     ports:
-      - "5435:5432"
+      - "${POSTGRES_PORT:-5435}:5432"
     volumes:
       - incidentbridge_pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U incidentbridge -d incidentbridge"]
-      interval: 3s
+      interval: 5s
       timeout: 5s
       retries: 20
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: incidentbridge-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-4000}:4000"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4000
+      DATABASE_URL: postgres://incidentbridge:${POSTGRES_PASSWORD:-incidentbridge}@postgres:5432/incidentbridge
+      MONITOR_INTERVAL_MS: ${MONITOR_INTERVAL_MS:-2000}
+      FAILURE_THRESHOLD: ${FAILURE_THRESHOLD:-3}
+      RECOVERY_THRESHOLD: ${RECOVERY_THRESHOLD:-3}
+      AT_USERNAME: ${AT_USERNAME:-}
+      AT_API_KEY: ${AT_API_KEY:-}
+      AT_SENDER_ID: ${AT_SENDER_ID:-}
+      AT_ALERT_PHONE: ${AT_ALERT_PHONE:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
 
 volumes:
   incidentbridge_pgdata:

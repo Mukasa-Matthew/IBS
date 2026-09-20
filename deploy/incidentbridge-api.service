@@ -1,0 +1,17 @@
+[Unit]
+Description=IncidentBridge API
+After=network.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/incidentbridge/backend
+EnvironmentFile=/opt/incidentbridge/backend/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
