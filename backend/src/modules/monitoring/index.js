@@ -1,5 +1,5 @@
 import { query } from '../../db/pool.js';
-import { config } from '../../config/index.js';
+import { config, africastalkingStatus } from '../../config/index.js';
 import { localizeFailure } from '../localization/engine.js';
 import { createThresholdTracker } from '../localization/threshold.js';
 import { planIncidents } from '../localization/correlation.js';
@@ -8,6 +8,7 @@ import {
   observeArea,
   reportingPath,
   getSimulationState,
+  syncAreaCodes,
 } from '../simulation/index.js';
 import {
   listServiceAreas,
@@ -23,6 +24,8 @@ import {
   resolveIncident,
 } from '../incidents/index.js';
 import { logEvent, listEvents } from '../../services/events.js';
+import { verifyAfricaTalking, listRecentSms } from '../../integrations/africastalking/sms.js';
+import { listAreaAssignments } from '../technicians/index.js';
 
 export const tracker = createThresholdTracker({
   failureThreshold: config.failureThreshold,
@@ -52,6 +55,7 @@ export async function processTick() {
   tickLock = true;
   try {
     const areas = await listServiceAreas();
+    syncAreaCodes(areas.map((area) => area.code));
     const readyFailures = [];
 
     for (const area of areas) {
@@ -163,15 +167,25 @@ export async function getDashboard() {
   const openIncidents = incidents.filter((incident) => incident.status !== 'RESOLVED');
   const events = await listEvents(50);
   const simulation = getSimulationState();
+  const africastalking = await verifyAfricaTalking().catch(() => ({
+    ...africastalkingStatus(),
+    connected: false,
+  }));
+  const recentSms = await listRecentSms(10);
 
-  const serviceAreas = areas.map((area) => {
+  const serviceAreas = [];
+  for (const area of areas) {
     const obs = observations.get(area.id);
     const pathNote =
       area.oob_status === 'ACTIVE_SIMULATED_CELLULAR'
         ? 'Out-of-band reporting: ACTIVE / simulated cellular'
         : 'Out-of-band reporting: standby';
-    return {
+    const threshold = tracker.get(area.id);
+    const assignments = await listAreaAssignments(area.id);
+    serviceAreas.push({
       ...area,
+      site_name: area.site_name || `${area.name} site rack`,
+      access_device_name: area.access_device_name || `${area.name} OLT`,
       observation: obs || null,
       primary_path_label:
         area.primary_path_status === 'AVAILABLE' ? 'Available' : 'Unavailable',
@@ -180,18 +194,57 @@ export async function getDashboard() {
           ? 'Active / simulated cellular'
           : 'Standby',
       path_note: pathNote,
-    };
-  });
+      technicians: assignments,
+      threshold: {
+        fail_domain: threshold.failDomain,
+        consecutive_failures: threshold.failCount,
+        consecutive_successes: threshold.healthyCount,
+        failure_threshold: config.failureThreshold,
+        recovery_threshold: config.recoveryThreshold,
+      },
+    });
+  }
+
+  const healthy = serviceAreas.filter((area) => area.health_state === 'HEALTHY').length;
+  const degraded = serviceAreas.filter((area) => area.health_state === 'DEGRADED').length;
+  const offline = serviceAreas.filter((area) =>
+    ['FAILURE', 'UNKNOWN'].includes(area.health_state),
+  ).length;
+  const affectedCustomers = openIncidents.reduce(
+    (sum, incident) => sum + (incident.potentially_affected_customer_count || 0),
+    0,
+  );
 
   return {
     generated_at: new Date().toISOString(),
     simulation_mode: true,
     network_status: overallNetworkStatus(serviceAreas, openIncidents),
+    summary: {
+      active_incidents: openIncidents.length,
+      healthy_areas: healthy,
+      degraded_areas: degraded,
+      offline_areas: offline,
+      potentially_affected_customers: affectedCustomers,
+      failure_threshold: config.failureThreshold,
+      recovery_threshold: config.recoveryThreshold,
+      monitor_interval_ms: config.monitorIntervalMs,
+    },
+    africastalking: {
+      configured: africastalking.configured,
+      connected: Boolean(africastalking.connected),
+      environment: africastalking.environment,
+      mode: africastalking.mode,
+      username: africastalking.username,
+      alert_phone: africastalking.alert_phone,
+      balance: africastalking.balance || null,
+      detail: africastalking.detail || null,
+    },
     topology: deriveTopology(serviceAreas, observations),
     service_areas: serviceAreas,
     incidents,
     active_incidents: openIncidents,
     events,
+    recent_sms: recentSms,
     simulation,
   };
 }

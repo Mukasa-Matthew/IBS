@@ -6,8 +6,13 @@ CREATE TABLE IF NOT EXISTS technicians (
   role TEXT NOT NULL,
   phone TEXT,
   team TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE technicians ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE technicians ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS service_areas (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -16,8 +21,34 @@ CREATE TABLE IF NOT EXISTS service_areas (
   customer_count INTEGER NOT NULL DEFAULT 0,
   technician_id UUID REFERENCES technicians(id),
   health_state TEXT NOT NULL DEFAULT 'HEALTHY',
+  site_name TEXT,
+  access_device_name TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE service_areas ADD COLUMN IF NOT EXISTS site_name TEXT;
+ALTER TABLE service_areas ADD COLUMN IF NOT EXISTS access_device_name TEXT;
+
+UPDATE service_areas SET site_name = name || ' site rack' WHERE site_name IS NULL;
+UPDATE service_areas SET access_device_name = name || ' OLT' WHERE access_device_name IS NULL;
+
+CREATE TABLE IF NOT EXISTS technician_service_areas (
+  technician_id UUID NOT NULL REFERENCES technicians(id) ON DELETE CASCADE,
+  service_area_id UUID NOT NULL REFERENCES service_areas(id) ON DELETE CASCADE,
+  priority TEXT NOT NULL CHECK (priority IN ('PRIMARY', 'BACKUP')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (technician_id, service_area_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tsa_one_primary
+  ON technician_service_areas (service_area_id)
+  WHERE priority = 'PRIMARY';
+
+INSERT INTO technician_service_areas (technician_id, service_area_id, priority)
+SELECT technician_id, id, 'PRIMARY'
+FROM service_areas
+WHERE technician_id IS NOT NULL
+ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
