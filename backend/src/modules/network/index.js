@@ -3,7 +3,7 @@ import { query } from '../../db/pool.js';
 export async function listServiceAreas() {
   const result = await query(
     `SELECT sa.id, sa.name, sa.code, sa.customer_count, sa.health_state,
-            sa.technician_id,
+            sa.technician_id, sa.site_name, sa.access_device_name,
             t.name AS technician_name, t.phone AS technician_phone, t.role AS technician_role,
             t.team AS technician_team,
             a.id AS agent_id, a.name AS agent_name,
@@ -18,9 +18,9 @@ export async function listServiceAreas() {
 
 export async function getNocTechnician() {
   const result = await query(
-    `SELECT id, name, role, phone, team
+    `SELECT id, name, role, phone, team, active
      FROM technicians
-     WHERE role = 'NOC'
+     WHERE role = 'NOC' AND COALESCE(active, true) = true
      ORDER BY name
      LIMIT 1`,
   );
@@ -46,69 +46,151 @@ export function healthFromClassification(domain, consecutiveFailures, failureThr
   return 'HEALTHY';
 }
 
+function nodeState(health, fallbackObs) {
+  if (health === 'FAILURE') return 'FAILURE';
+  if (health === 'UNKNOWN') return 'UNKNOWN';
+  if (health === 'DEGRADED') return 'DEGRADED';
+  if (!fallbackObs) return 'UNKNOWN';
+  return 'HEALTHY';
+}
+
+/** Worst of two topology states — used to cascade failures down a path. */
+function worseState(a, b) {
+  const rank = { HEALTHY: 0, DEGRADED: 1, UNKNOWN: 2, FAILURE: 3 };
+  const left = a || 'HEALTHY';
+  const right = b || 'HEALTHY';
+  return (rank[left] ?? 0) >= (rank[right] ?? 0) ? left : right;
+}
+
+/**
+ * Dynamic topology: Internet → upstream → core → each site rack → OLT → customers.
+ * Layout positions are computed on the frontend from node ids; backend only emits graph data.
+ *
+ * Path cascade: if a hop is down (uplink, site, or backbone), everything downstream on that
+ * branch shows the same impact — OLT/customers must not stay green when the route is broken.
+ */
 export function deriveTopology(areas, observations) {
-  const byCode = Object.fromEntries(areas.map((area) => [area.code, { area, obs: observations.get(area.id) }]));
-  const mukonoA = byCode.MUKONO_A;
-  const mukonoB = byCode.MUKONO_B;
+  const nodes = [
+    { id: 'INTERNET', label: 'Internet', type: 'cloud', state: 'HEALTHY' },
+    { id: 'UPSTREAM', label: 'ISP upstream', type: 'provider', state: 'HEALTHY' },
+    { id: 'CORE', label: 'ISP core', type: 'core', state: 'HEALTHY' },
+  ];
+  const links = [
+    { id: 'INTERNET-UPSTREAM', from: 'INTERNET', to: 'UPSTREAM', label: 'Internet transit', state: 'HEALTHY' },
+    { id: 'UPSTREAM-CORE', from: 'UPSTREAM', to: 'CORE', label: 'ISP upstream', state: 'HEALTHY' },
+  ];
 
-  function nodeState(health, fallbackObs) {
-    if (health === 'FAILURE') return 'FAILURE';
-    if (health === 'UNKNOWN') return 'UNKNOWN';
-    if (health === 'DEGRADED') return 'DEGRADED';
-    if (!fallbackObs) return 'UNKNOWN';
-    return 'HEALTHY';
-  }
+  const siteEntries = areas.map((area) => ({
+    area,
+    obs: observations.get(area.id),
+  }));
 
-  const internetWitnesses = [mukonoA, mukonoB].filter((item) => item?.obs?.core_reachable);
+  const internetWitnesses = siteEntries.filter((item) => item.obs?.core_reachable);
   const internetDownWitnesses = internetWitnesses.filter((item) => item.obs.internet_reachable === false);
-  const coreDownA = mukonoA?.obs && mukonoA.obs.core_reachable === false;
-  const coreDownB = mukonoB?.obs && mukonoB.obs.core_reachable === false;
 
   let internetState = 'HEALTHY';
   if (internetWitnesses.length === 0) internetState = 'UNKNOWN';
-  else if (internetDownWitnesses.length === internetWitnesses.length) internetState = 'FAILURE';
-  else if (internetDownWitnesses.length > 0) internetState = 'DEGRADED';
+  else if (internetDownWitnesses.length === internetWitnesses.length && internetWitnesses.length > 0) {
+    internetState = 'FAILURE';
+  } else if (internetDownWitnesses.length > 0) internetState = 'DEGRADED';
 
+  const coreDownCount = siteEntries.filter((item) => item.obs && item.obs.core_reachable === false).length;
   let coreState = 'HEALTHY';
-  if (coreDownA && coreDownB) coreState = 'FAILURE';
-  else if (coreDownA || coreDownB) coreState = 'DEGRADED';
+  if (coreDownCount === siteEntries.length && siteEntries.length > 0) coreState = 'FAILURE';
+  else if (coreDownCount > 0) coreState = 'DEGRADED';
 
-  return {
-    nodes: [
-      { id: 'INTERNET', label: 'Internet', state: internetState },
-      { id: 'CORE', label: 'Core', state: coreState },
+  // Backbone: upstream failure paints internet + upstream; total core loss paints core red.
+  nodes[0].state = internetState;
+  nodes[1].state = worseState(internetState, coreState === 'FAILURE' ? 'FAILURE' : 'HEALTHY');
+  nodes[2].state = worseState(coreState, internetState === 'FAILURE' ? 'DEGRADED' : 'HEALTHY');
+  links[0].state = internetState;
+  links[1].state = worseState(internetState, coreState === 'FAILURE' ? 'FAILURE' : 'HEALTHY');
+
+  for (const { area, obs } of siteEntries) {
+    const code = area.code;
+    const areaState = nodeState(area.health_state, obs);
+    const localDown = obs && obs.local_access_reachable === false;
+    const coreDown = obs && obs.core_reachable === false;
+    const inetDown = obs && obs.internet_reachable === false;
+
+    // Uplink hop (core → site rack)
+    let uplinkState = 'HEALTHY';
+    if (coreDown) uplinkState = 'FAILURE';
+    else if (coreState === 'FAILURE') uplinkState = 'FAILURE';
+    else if (area.health_state === 'DEGRADED') uplinkState = 'DEGRADED';
+
+    // Site rack: own health + anything blocking the path above it
+    let siteState = areaState;
+    if (coreDown || coreState === 'FAILURE') siteState = worseState(siteState, 'FAILURE');
+    if (internetState === 'FAILURE') siteState = worseState(siteState, 'FAILURE');
+    else if (inetDown) siteState = worseState(siteState, 'DEGRADED');
+
+    // Everything below the rack (OLT → customers) inherits the broken route.
+    // Local access failure also marks the access segment; uplink/site failure paints the whole branch.
+    let branchState = siteState;
+    if (localDown) branchState = worseState(branchState, 'FAILURE');
+    if (uplinkState === 'FAILURE' || siteState === 'FAILURE') {
+      branchState = worseState(branchState, 'FAILURE');
+    } else if (uplinkState === 'DEGRADED' || siteState === 'DEGRADED') {
+      branchState = worseState(branchState, 'DEGRADED');
+    }
+
+    const siteToOltState = localDown ? 'FAILURE' : branchState;
+    const oltToCustState = branchState;
+
+    nodes.push(
       {
-        id: 'MUKONO_A',
-        label: 'Mukono A',
-        state: nodeState(mukonoA?.area.health_state, mukonoA?.obs),
+        id: code,
+        label: area.site_name || `${area.name} rack`,
+        type: 'site',
+        service_area: area.name,
+        state: siteState,
+        customer_count: area.customer_count,
+        technician: area.technician_name,
       },
       {
-        id: 'MUKONO_B',
-        label: 'Mukono B',
-        state: nodeState(mukonoB?.area.health_state, mukonoB?.obs),
+        id: `OLT_${code}`,
+        label: area.access_device_name || `${area.name} OLT`,
+        type: 'access',
+        service_area: area.name,
+        state: branchState,
       },
-    ],
-    links: [
       {
-        id: 'CORE-INTERNET',
+        id: `CUST_${code}`,
+        label: `${area.name} customers (${area.customer_count})`,
+        type: 'customers',
+        service_area: area.name,
+        state: branchState,
+        customer_count: area.customer_count,
+      },
+    );
+
+    links.push(
+      {
+        id: `CORE-${code}`,
         from: 'CORE',
-        to: 'INTERNET',
-        state: internetState,
+        to: code,
+        label: `${area.name} fibre uplink`,
+        state: uplinkState,
       },
       {
-        id: 'CORE-MUKONO_A',
-        from: 'CORE',
-        to: 'MUKONO_A',
-        state: coreDownA ? 'FAILURE' : mukonoA?.area.health_state === 'DEGRADED' ? 'DEGRADED' : 'HEALTHY',
+        id: `${code}-OLT`,
+        from: code,
+        to: `OLT_${code}`,
+        label: 'Site access',
+        state: siteToOltState,
       },
       {
-        id: 'CORE-MUKONO_B',
-        from: 'CORE',
-        to: 'MUKONO_B',
-        state: coreDownB ? 'FAILURE' : mukonoB?.area.health_state === 'DEGRADED' ? 'DEGRADED' : 'HEALTHY',
+        id: `OLT-${code}-CUST`,
+        from: `OLT_${code}`,
+        to: `CUST_${code}`,
+        label: 'Local access network',
+        state: oltToCustState,
       },
-    ],
-  };
+    );
+  }
+
+  return { nodes, links };
 }
 
 export function overallNetworkStatus(areas, openIncidents) {
