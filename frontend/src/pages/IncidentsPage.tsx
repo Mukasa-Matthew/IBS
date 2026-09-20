@@ -5,6 +5,8 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { Panel } from '../components/layout/Panel';
 import { EvidencePanel } from '../components/EvidencePanel';
 import { StatusBadge } from '../components/StatusBadge';
+import { SmsStatus } from '../components/SmsStatus';
+import { MetricCard } from '../components/LiveCharts';
 import { formatClock, formatDuration } from '../lib/format';
 import { markInvestigating } from '../services/api';
 import type { Incident } from '../types';
@@ -12,7 +14,7 @@ import type { Incident } from '../types';
 const FILTERS = ['ACTIVE', 'ALL', 'RESOLVED'] as const;
 
 export function IncidentsPage() {
-  const { dashboard } = useDashboard();
+  const { dashboard, history } = useDashboard();
   const { incidentId } = useParams();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('ACTIVE');
@@ -36,20 +38,23 @@ export function IncidentsPage() {
 
   if (!dashboard) return null;
 
+  const incidentSeries = history.map((item) => item.activeIncidents * 20);
+  const customerSeries = history.map((item) => Math.min(100, item.affectedCustomers));
+
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Incidents"
         description="Failure-domain localization, impact, technician routing, and notification status."
         actions={
-          <div className="flex rounded-lg border border-[#1e2a38] p-1">
+          <div className="flex rounded-full border border-line bg-surface p-1">
             {FILTERS.map((item) => (
               <button
                 key={item}
                 type="button"
                 onClick={() => setFilter(item)}
-                className={`rounded-md px-3 py-1 text-xs ${
-                  filter === item ? 'bg-[#172333] text-white' : 'text-slate-400 hover:text-slate-200'
+                className={`rounded-full px-3 py-1 text-xs ${
+                  filter === item ? 'bg-brand text-white' : 'text-muted hover:text-ink'
                 }`}
               >
                 {item === 'ACTIVE' ? 'Active' : item === 'ALL' ? 'All' : 'Resolved'}
@@ -59,14 +64,33 @@ export function IncidentsPage() {
         }
       />
 
+      <div className="mb-5 grid gap-4 md:grid-cols-2">
+        <MetricCard
+          label="Open incident load"
+          value={String(dashboard.active_incidents.length)}
+          delta={`${dashboard.summary?.potentially_affected_customers ?? 0} customers potentially affected`}
+          deltaPositive={dashboard.active_incidents.length === 0}
+          tone={dashboard.active_incidents.length === 0 ? 'forest' : 'rose'}
+          series={incidentSeries.length ? incidentSeries : [0, 0, 5, 10, 20, 20]}
+        />
+        <MetricCard
+          label="Impact pressure"
+          value={String(dashboard.summary?.potentially_affected_customers ?? 0)}
+          delta="Tracks simulation failure accumulation"
+          deltaPositive={(dashboard.summary?.potentially_affected_customers ?? 0) === 0}
+          tone={(dashboard.summary?.potentially_affected_customers ?? 0) === 0 ? 'violet' : 'rose'}
+          series={customerSeries.length ? customerSeries : [0, 0, 10, 30, 50, 67]}
+        />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-12">
         <Panel className="lg:col-span-7" title="Incident register" subtitle={`${incidents.length} shown`}>
           <div className="overflow-x-auto">
             {incidents.length === 0 ? (
-              <p className="text-sm text-slate-500">No incidents in this view.</p>
+              <p className="text-sm text-muted">No incidents in this view.</p>
             ) : (
               <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="text-[11px] uppercase tracking-wide text-slate-500">
+                <thead className="text-[11px] uppercase tracking-wide text-muted">
                   <tr>
                     <th className="whitespace-nowrap pb-3 pr-4 font-medium">Reference</th>
                     <th className="whitespace-nowrap pb-3 pr-4 font-medium">Summary</th>
@@ -95,7 +119,7 @@ export function IncidentsPage() {
             <button
               type="button"
               onClick={() => markInvestigating(selected.id).catch((error) => console.error(error))}
-              className="mt-3 rounded-lg border border-[#2a3b4d] px-3 py-2 text-sm text-slate-200 hover:text-white"
+              className="mt-3 rounded-full border border-line bg-surface px-4 py-2 text-sm text-brand hover:border-brand"
             >
               Begin investigation
             </button>
@@ -118,15 +142,15 @@ function IncidentRow({
   return (
     <tr
       onClick={onSelect}
-      className={`cursor-pointer border-t border-[#1e2a38] ${selected ? 'bg-[#172333]' : 'hover:bg-[#141d28]'}`}
+      className={`cursor-pointer border-t border-line ${selected ? 'bg-brand-soft' : 'hover:bg-surface-2'}`}
     >
-      <td className="py-3 align-top font-mono text-sky-200">{incident.reference}</td>
+      <td className="py-3 align-top font-mono text-brand">{incident.reference}</td>
       <td className="py-3 align-top">
-        <p className="text-slate-100">{incident.title}</p>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="text-ink">{incident.title}</p>
+        <p className="mt-1 text-xs text-muted">
           {incident.area_names.join(', ')} · {incident.failure_domain_label} · {incident.impact_statement}
         </p>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-muted">
           {incident.assigned_technician?.name || 'Unassigned'} · Detected {formatClock(incident.detected_at)}
           {incident.resolved_at ? ` · ${formatDuration(incident.duration_ms)}` : ''}
         </p>
@@ -138,7 +162,7 @@ function IncidentRow({
         <StatusBadge label={incident.status} value={incident.status} />
       </td>
       <td className="py-3 align-top">
-        <StatusBadge label={incident.notification_status} value={incident.notification_status} />
+        <SmsStatus status={incident.notification_status} detail={incident.notification_detail} compact />
       </td>
     </tr>
   );

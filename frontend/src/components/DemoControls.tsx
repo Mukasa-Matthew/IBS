@@ -1,21 +1,19 @@
-import { applyScenario } from '../services/api';
-
-const SCENARIOS = [
-  { id: 'NORMAL_NETWORK', label: 'Normal network' },
-  { id: 'FAIL_MUKONO_A_UPLINK', label: 'Fail Mukono A uplink' },
-  { id: 'FAIL_MUKONO_B_UPLINK', label: 'Fail Mukono B uplink' },
-  { id: 'FAIL_UPSTREAM_INTERNET', label: 'Fail upstream internet' },
-  { id: 'FAIL_MUKONO_A_LOCAL_ACCESS', label: 'Fail Mukono A local access' },
-  { id: 'FAIL_MUKONO_B_LOCAL_ACCESS', label: 'Fail Mukono B local access' },
-  { id: 'AMBIGUOUS_FAILURE', label: 'Ambiguous failure' },
-  { id: 'RESTORE_NETWORK', label: 'Restore network' },
-];
+import { useEffect, useState } from 'react';
+import { applyScenario, listSimulationScenarios, type SimulationScenario } from '../services/api';
 
 interface Props {
   current: string;
 }
 
 export function DemoControls({ current }: Props) {
+  const [scenarios, setScenarios] = useState<SimulationScenario[]>([]);
+
+  useEffect(() => {
+    listSimulationScenarios()
+      .then(setScenarios)
+      .catch((error) => console.error(error));
+  }, []);
+
   return (
     <section className="rounded-lg border border-amber-400/20 bg-[#16120c] px-5 py-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -32,7 +30,7 @@ export function DemoControls({ current }: Props) {
         </p>
       </div>
       <div className="flex flex-wrap gap-2">
-        {SCENARIOS.map((scenario) => {
+        {scenarios.map((scenario) => {
           const active = current === scenario.id;
           return (
             <button
