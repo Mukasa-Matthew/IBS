@@ -14,11 +14,15 @@ export function formatDuration(ms: number | null | undefined) {
 export function stateTone(state: string) {
   const value = (state || '').toUpperCase();
   if (
-    ['HEALTHY', 'AVAILABLE', 'SENT', 'RESOLVED', 'ACTIVE', 'STANDBY'].includes(value)
+    ['HEALTHY', 'AVAILABLE', 'SENT', 'DELIVERED', 'RESOLVED', 'ACTIVE', 'STANDBY', 'SUCCESS'].includes(value)
   ) {
     return 'ok';
   }
-  if (['DEGRADED', 'MEDIUM', 'ASSIGNED', 'SIMULATED', 'INVESTIGATING', 'LOW'].includes(value)) {
+  if (
+    ['DEGRADED', 'MEDIUM', 'ASSIGNED', 'SIMULATED', 'QUEUED', 'INVESTIGATING', 'LOW', 'PENDING'].includes(
+      value,
+    )
+  ) {
     return 'warn';
   }
   if (
@@ -47,12 +51,12 @@ export function toneClasses(tone: string) {
 export function toneHex(tone: string) {
   switch (tone) {
     case 'ok':
-      return '#3dd68c';
+      return '#34d399'; /* bright on dark topology */
     case 'warn':
-      return '#e7b549';
+      return '#ef8d22';
     case 'fail':
-      return '#e85d5d';
+      return '#f07167';
     default:
-      return '#8b9bb0';
+      return '#8fa89a';
   }
 }

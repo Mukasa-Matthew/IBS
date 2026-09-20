@@ -15,14 +15,17 @@ export function EventsPage() {
       />
       <Panel title="Live stream" subtitle="Newest first">
         {dashboard.events.length === 0 ? (
-          <p className="text-sm text-slate-500">Waiting for monitoring observations.</p>
+          <p className="text-sm text-muted">Waiting for monitoring observations.</p>
         ) : (
           <div className="max-h-[70vh] overflow-auto font-mono text-[12px] leading-6">
             {dashboard.events.map((event) => (
-              <div key={event.id} className="grid grid-cols-[88px_110px_1fr] gap-3 border-b border-[#1a2430] py-2">
-                <span className="text-slate-500">{formatClock(event.occurred_at)}</span>
-                <span className="text-slate-400">{event.type}</span>
-                <span className="text-slate-100">{event.message}</span>
+              <div
+                key={event.id}
+                className="grid grid-cols-[88px_110px_1fr] gap-3 border-b border-line py-2"
+              >
+                <span className="text-muted">{formatClock(event.occurred_at)}</span>
+                <span className="text-brand">{event.type}</span>
+                <span className="text-ink">{event.message}</span>
               </div>
             ))}
           </div>

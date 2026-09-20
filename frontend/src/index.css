@@ -1,20 +1,89 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-brand: #09733f;
+  --color-brand-deep: #065c32;
+  --color-brand-soft: #e6f4ec;
+  --color-accent: #ef8d22;
+  --color-accent-deep: #d97712;
+  --color-accent-soft: #fff3e5;
+
+  --color-canvas: var(--ib-canvas);
+  --color-surface: var(--ib-surface);
+  --color-surface-2: var(--ib-surface-2);
+  --color-ink: var(--ib-ink);
+  --color-muted: var(--ib-muted);
+  --color-line: var(--ib-line);
+  --color-sidebar: var(--ib-sidebar);
+  --color-sidebar-ink: var(--ib-sidebar-ink);
+  --color-sidebar-muted: var(--ib-sidebar-muted);
+  --color-ok: var(--ib-ok);
+  --color-warn: var(--ib-warn);
+  --color-fail: var(--ib-fail);
+}
+
+:root {
+  color-scheme: light;
+  --ib-canvas: #f3f6f4;
+  --ib-surface: #ffffff;
+  --ib-surface-2: #f7faf8;
+  --ib-ink: #0f1f17;
+  --ib-muted: #5a6b61;
+  --ib-line: #d5e0d9;
+  --ib-sidebar: #09733f;
+  --ib-sidebar-ink: #f4fbf7;
+  --ib-sidebar-muted: #b7dbc8;
+  --ib-ok: #09733f;
+  --ib-warn: #ef8d22;
+  --ib-fail: #c0382b;
+  --ib-chart: #ef8d22;
+  --ib-chart-fill-from: rgba(239, 141, 34, 0.32);
+  --ib-chart-fill-to: rgba(239, 141, 34, 0.02);
+  --ib-topo-bg: #03150c;
+  --ib-topo-node: #0c2418;
+  --ib-topo-label: #f0fdf6;
+  --ib-topo-muted: #c5e6d4;
+}
+
+.dark {
+  color-scheme: dark;
+  --ib-canvas: #07140e;
+  --ib-surface: #0d1c14;
+  --ib-surface-2: #12251a;
+  --ib-ink: #e8f2ec;
+  --ib-muted: #8fa89a;
+  --ib-line: #1e3a2c;
+  --ib-sidebar: #053d22;
+  --ib-sidebar-ink: #e8f2ec;
+  --ib-sidebar-muted: #7fad93;
+  --ib-ok: #2fa86a;
+  --ib-warn: #ef8d22;
+  --ib-fail: #f07167;
+  --ib-chart: #ef8d22;
+  --ib-chart-fill-from: rgba(239, 141, 34, 0.36);
+  --ib-chart-fill-to: rgba(239, 141, 34, 0.04);
+  --ib-topo-bg: #020d08;
+  --ib-topo-node: #0a1f14;
+  --ib-topo-label: #f5fff9;
+  --ib-topo-muted: #d2edd9;
 }
 
 html,
 body,
 #root {
   height: 100%;
+  overflow: hidden;
 }
 
 body {
   margin: 0;
-  background: #0b1118;
-  color: #e8eef5;
+  background: var(--ib-canvas);
+  color: var(--ib-ink);
   font-family: var(--font-sans);
 }
 
@@ -24,6 +93,13 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a3848;
+  background: color-mix(in srgb, var(--ib-muted) 45%, transparent);
   border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }
